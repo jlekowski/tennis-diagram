@@ -1,12 +1,25 @@
-export default function PropertyPanel({ arrow, angles, onChange, onDelete, onClose }) {
+/**
+ * `chrome` carries the layout classes for the panel shell so the same panels
+ * can render as the desktop right sidebar or bare inside the mobile Sheet.
+ */
+const SIDEBAR_CHROME = "w-72 border-l border-slate-200";
+
+export default function PropertyPanel({
+  arrow,
+  angles,
+  onChange,
+  onDelete,
+  onClose,
+  chrome = SIDEBAR_CHROME,
+}) {
   if (angles) {
-    return <AnglesPanel angles={angles} onChange={onChange} onDelete={onDelete} onClose={onClose} />;
+    return <AnglesPanel angles={angles} onChange={onChange} onDelete={onDelete} onClose={onClose} chrome={chrome} />;
   }
   if (arrow) {
-    return <ArrowPanel arrow={arrow} onChange={onChange} onDelete={onDelete} onClose={onClose} />;
+    return <ArrowPanel arrow={arrow} onChange={onChange} onDelete={onDelete} onClose={onClose} chrome={chrome} />;
   }
   return (
-    <aside className="hidden md:block md:w-72 p-4 bg-white border-l border-slate-200 text-sm text-slate-500">
+    <aside className={"p-4 bg-white text-sm text-slate-500 " + chrome}>
       <p className="font-semibold text-slate-700 mb-2">Properties</p>
       <p>Select an arrow or angles wedge to edit it.</p>
       <p className="mt-4 text-xs text-slate-400">
@@ -17,9 +30,9 @@ export default function PropertyPanel({ arrow, angles, onChange, onDelete, onClo
   );
 }
 
-function ArrowPanel({ arrow, onChange, onDelete, onClose }) {
+function ArrowPanel({ arrow, onChange, onDelete, onClose, chrome }) {
   return (
-    <aside className="w-full md:w-72 p-4 bg-white border-t md:border-t-0 md:border-l border-slate-200 text-sm space-y-3">
+    <aside className={"p-4 bg-white text-sm space-y-3 " + chrome}>
       <PanelHeader title="Arrow properties" onClose={onClose} />
 
       <FieldRow label="Kind">
@@ -53,10 +66,10 @@ function ArrowPanel({ arrow, onChange, onDelete, onClose }) {
   );
 }
 
-function AnglesPanel({ angles, onChange, onDelete, onClose }) {
+function AnglesPanel({ angles, onChange, onDelete, onClose, chrome }) {
   const bisects = angles.bisects ?? 0;
   return (
-    <aside className="w-full md:w-72 p-4 bg-white border-t md:border-t-0 md:border-l border-slate-200 text-sm space-y-3">
+    <aside className={"p-4 bg-white text-sm space-y-3 " + chrome}>
       <PanelHeader title="Angles properties" onClose={onClose} />
 
       <FieldRow label="Kind">

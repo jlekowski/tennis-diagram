@@ -6,16 +6,73 @@ body,
   height: 100%;
 }
 
+/* Mobile browsers resize the viewport as the URL bar collapses; dvh tracks the
+   visible area so the court never gets cut off. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background-color: #f8fafc;
   color: #0f172a;
+  /* No pull-to-refresh or rubber-banding over the app shell */
+  overscroll-behavior-y: none;
 }
 
-/* Prevent text selection while dragging on the court */
+/* Prevent text selection while dragging on the court, and hand every touch
+   gesture to our own pinch/pan handlers rather than the browser. */
 .court-surface {
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
+}
+
+/* iOS Safari zooms the page when focusing an input smaller than 16px. */
+input[type="text"] {
+  font-size: 16px;
+}
+
+/* Controls in the mobile bottom bars. Both the tool strip and the animation bar
+   size their children with this, so switching modes doesn't change the bar
+   height and resize the court. */
+.bar-item {
+  min-height: 52px;
+}
+
+/* Safe-area helpers for the mobile bars and bottom sheet. */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.sheet-in {
+  animation: sheet-in 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-in {
+    animation: none;
+  }
 }

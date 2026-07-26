@@ -1,13 +1,23 @@
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
 import { simulateFrames } from "./AnimationPlayer.jsx";
+import { COURT_VIEWBOX } from "./Court.jsx";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+/** The full court, ignoring whatever the user has zoomed/panned to on screen. */
+const FULL_VIEWBOX = `${COURT_VIEWBOX.minX} ${COURT_VIEWBOX.minY} ${COURT_VIEWBOX.w} ${COURT_VIEWBOX.h}`;
+
 /**
  * Serialize a live <svg> DOM node to a standalone SVG string (with xmlns).
+ *
+ * The live element's viewBox reflects the on-screen zoom, so it is reset to the
+ * whole court — exports are always of the full diagram.
  */
 function serializeSvg(svgEl) {
   const clone = svgEl.cloneNode(true);
+  clone.setAttribute("viewBox", FULL_VIEWBOX);
+  clone.removeAttribute("width");
+  clone.removeAttribute("height");
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   if (!clone.getAttribute("xmlns:xlink")) {
     clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
@@ -95,13 +105,13 @@ export async function downloadGif(
     throw new Error("Nothing to animate — add a ball or movement arrow first.");
   }
 
-  const vb = svgEl.getAttribute("viewBox").split(/\s+/);
-  const width = parseFloat(vb[2]);
-  const height = parseFloat(vb[3]);
+  const width = COURT_VIEWBOX.w;
+  const height = COURT_VIEWBOX.h;
 
   // Build a reusable base clone: static scene + player groups we can transform.
   const base = svgEl.cloneNode(true);
   base.setAttribute("xmlns", SVG_NS);
+  base.setAttribute("viewBox", FULL_VIEWBOX);
   base.setAttribute("width", width);
   base.setAttribute("height", height);
   base.querySelectorAll("[data-handle-point]").forEach((el) => el.remove());
@@ -168,9 +178,8 @@ export function downloadSvg(svgEl) {
 
 export async function downloadPng(svgEl, scale = 2) {
   const xml = serializeSvg(svgEl);
-  const vb = svgEl.getAttribute("viewBox").split(/\s+/);
-  const width = parseFloat(vb[2]);
-  const height = parseFloat(vb[3]);
+  const width = COURT_VIEWBOX.w;
+  const height = COURT_VIEWBOX.h;
 
   const svgBlob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(svgBlob);

@@ -155,7 +155,115 @@ export default function Toolbar({
   );
 }
 
-function FileMenu({ onExportSvg, onExportPng, onExportJson, onImportJson, onLoadPresets }) {
+/**
+ * Mobile top bar: everything except the drawing tools, which live in the
+ * bottom strip so they sit under the thumb. Only one of Toolbar /
+ * MobileTopBar is mounted at a time (see useIsMobile in App).
+ */
+export function MobileTopBar({
+  presetGroups,
+  onApplyPreset,
+  selectedPreset,
+  onLoadPresets,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
+  onExportSvg,
+  onExportPng,
+  onExportJson,
+  onImportJson,
+  onReset,
+  animMode,
+  onAnimMode,
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-2 pb-2 bg-white border-b border-slate-200 pt-safe">
+      <select
+        value={selectedPreset ?? ""}
+        onChange={(e) => { if (e.target.value) onApplyPreset(e.target.value); }}
+        className="min-w-0 flex-1 h-11 px-2 text-sm rounded border border-slate-300 bg-white"
+        aria-label="Preset"
+      >
+        <option value="" disabled>Choose…</option>
+        {presetGroups.map((group) => (
+          <optgroup key={group.label} label={group.label}>
+            {group.options.map((opt) => (
+              <option key={opt.key} value={opt.key}>{opt.label}</option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+
+      <IconButton onClick={onUndo} disabled={!canUndo} label="Undo">↩</IconButton>
+      <IconButton onClick={onRedo} disabled={!canRedo} label="Redo">↪</IconButton>
+
+      <FileMenu
+        onExportSvg={onExportSvg}
+        onExportPng={onExportPng}
+        onExportJson={onExportJson}
+        onImportJson={onImportJson}
+        onLoadPresets={onLoadPresets}
+        onReset={onReset}
+        compact
+      />
+
+      <button
+        onClick={onAnimMode}
+        aria-label="Animate"
+        className={
+          "shrink-0 w-11 h-11 rounded border text-base flex items-center justify-center " +
+          (animMode
+            ? "bg-emerald-600 text-white border-emerald-600"
+            : "bg-white text-emerald-700 border-emerald-400")
+        }
+      >
+        ▶
+      </button>
+    </div>
+  );
+}
+
+/** Mobile bottom strip holding the five drawing tools. */
+export function MobileToolStrip({ tool, onToolChange }) {
+  return (
+    <div className="flex items-stretch gap-1 px-2 pt-1.5 bg-white border-t border-slate-200 pb-safe">
+      {TOOL_BUTTONS.map((b) => {
+        const active = tool === b.id;
+        const accent = (TOOL_BTN_ACCENT[b.id] ?? TOOL_BTN_STYLE)[active ? "selected" : "unselected"];
+        return (
+          <button
+            key={b.id}
+            onClick={() => onToolChange(b.id)}
+            aria-pressed={active}
+            className={
+              "bar-item flex-1 pb-1.5 rounded border flex flex-col items-center justify-center gap-0.5 " +
+              accent
+            }
+          >
+            <span className="text-lg leading-none select-none">{b.icon}</span>
+            <span className="text-[11px] leading-none">{b.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function IconButton({ onClick, disabled, label, children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className="shrink-0 w-11 h-11 rounded border border-slate-300 bg-white text-base flex items-center justify-center disabled:opacity-40"
+    >
+      {children}
+    </button>
+  );
+}
+
+function FileMenu({ onExportSvg, onExportPng, onExportJson, onImportJson, onLoadPresets, onReset, compact }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null); // { top, left } fixed-position anchor
   const ref = useRef(null);
@@ -206,7 +314,10 @@ function FileMenu({ onExportSvg, onExportPng, onExportJson, onImportJson, onLoad
       <button
         key={label}
         onClick={() => { action(); setOpen(false); }}
-        className="block w-full text-left px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+        className={
+          "block w-full text-left px-3 text-sm text-slate-700 hover:bg-slate-50 " +
+          (compact ? "py-3" : "py-1.5")
+        }
       >
         {label}
       </button>
@@ -218,9 +329,14 @@ function FileMenu({ onExportSvg, onExportPng, onExportJson, onImportJson, onLoad
       <button
         ref={btnRef}
         onClick={() => setOpen((o) => !o)}
-        className="px-2 py-1.5 text-sm rounded border border-slate-300 bg-white hover:bg-slate-50"
+        aria-label={compact ? "File menu" : undefined}
+        className={
+          compact
+            ? "shrink-0 w-11 h-11 rounded border border-slate-300 bg-white text-base flex items-center justify-center"
+            : "px-2 py-1.5 text-sm rounded border border-slate-300 bg-white hover:bg-slate-50"
+        }
       >
-        File ▾
+        {compact ? "⋯" : "File ▾"}
       </button>
       {open && pos &&
         createPortal(
@@ -235,6 +351,13 @@ function FileMenu({ onExportSvg, onExportPng, onExportJson, onImportJson, onLoad
             {item("Load JSON", onImportJson)}
             <div className="border-t border-slate-100 my-0.5" />
             {item("Load presets (.jsonl)", onLoadPresets)}
+            {/* On mobile there is no room for a standalone Reset button. */}
+            {compact && onReset && (
+              <>
+                <div className="border-t border-slate-100 my-0.5" />
+                {item("Reset", onReset)}
+              </>
+            )}
           </div>,
           document.body,
         )}
