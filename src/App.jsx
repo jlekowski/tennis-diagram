@@ -48,7 +48,7 @@ export default function App() {
   const [animMode, setAnimMode] = useState(false);
   const [animSpeed, setAnimSpeed] = useState(1);
   const [gifProgress, setGifProgress] = useState(null); // 0..1 while exporting
-  const { frame: animFrame, play: animPlay, pause: animPause, reset: animReset } =
+  const { frame: animFrame, play: animPlay, pause: animPause, resume: animResume, reset: animReset } =
     useAnimation(state.players, state.arrows, Math.round(700 / animSpeed));
 
   // Only one of the mobile/desktop layouts is mounted at a time, so the
@@ -64,6 +64,9 @@ export default function App() {
   const [pointerPos, setPointerPos] = useState(null);   // angles draft preview
   // Endpoint-handle drag: { kind: 'arrow'|'angles', id, point, x, y }
   const [handleDrag, setHandleDrag] = useState(null);
+  // Live curvature-slider preview: { arrowId, value } — not committed to
+  // history until the drag/keypress ends (see PropertyPanel's ArrowPanel).
+  const [curvatureDraft, setCurvatureDraft] = useState(null);
 
   const [userPresets, setUserPresets] = useState([]);
   const [lastPresetKey, setLastPresetKey] = useState(null);
@@ -448,6 +451,7 @@ export default function App() {
     setLastPresetKey(key);
     deselectAll();
     setAnglesDraft(null);
+    if (animMode) animReset();
   }
 
   async function handlePresetsFileSelected(e) {
@@ -512,6 +516,13 @@ export default function App() {
       commit((s) => updateAngles(s, selectedAnglesId, patch));
     }
   }
+  function handleCurvaturePreview(value) {
+    if (selectedArrowId) setCurvatureDraft({ arrowId: selectedArrowId, value });
+  }
+  function handleCurvatureCommit(value) {
+    if (selectedArrowId) commit((s) => updateArrow(s, selectedArrowId, { curvature: value }));
+    setCurvatureDraft(null);
+  }
   function handleDeleteSelected() {
     if (selectedArrowId) {
       commit((s) => deleteArrow(s, selectedArrowId));
@@ -529,7 +540,13 @@ export default function App() {
     if (!handleDrag || handleDrag.kind !== kind || handleDrag.id !== el.id) return el;
     return { ...el, [handleDrag.point]: { x: handleDrag.x, y: handleDrag.y } };
   }
-  const arrowsToRender = state.arrows.map((a) => applyHandleDrag(a, "arrow"));
+  const arrowsToRender = state.arrows.map((a) => {
+    const dragged = applyHandleDrag(a, "arrow");
+    if (curvatureDraft && curvatureDraft.arrowId === a.id) {
+      return { ...dragged, curvature: curvatureDraft.value };
+    }
+    return dragged;
+  });
   const anglesToRender = angles.map((a) => applyHandleDrag(a, "angles"));
   const playersToRender = state.players.map((p) =>
     drag && drag.playerId === p.id ? { ...p, x: drag.x, y: drag.y } : p,
@@ -610,6 +627,7 @@ export default function App() {
       frame={animFrame}
       onPlay={animPlay}
       onPause={animPause}
+      onResume={animResume}
       onReset={animReset}
       onClose={exitAnimMode}
       speed={animSpeed}
@@ -623,6 +641,8 @@ export default function App() {
       arrow={selectedArrow}
       angles={selectedAngles}
       onChange={handlePatchSelected}
+      onCurvaturePreview={handleCurvaturePreview}
+      onCurvatureCommit={handleCurvatureCommit}
       onDelete={handleDeleteSelected}
       onClose={deselectAll}
       chrome={panelChrome}
@@ -795,6 +815,7 @@ export default function App() {
             frame={animFrame}
             onPlay={animPlay}
             onPause={animPause}
+            onResume={animResume}
             onReset={animReset}
             onClose={exitAnimMode}
             speed={animSpeed}

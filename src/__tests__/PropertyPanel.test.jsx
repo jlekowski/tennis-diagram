@@ -46,6 +46,12 @@ describe("PropertyPanel", () => {
       expect(screen.getByText(/Curvature \(30\)/)).toBeInTheDocument();
     });
 
+    it("hides curvature slider for movement arrows", () => {
+      const moveArrow = { ...arrow, kind: "movement-a" };
+      render(<PropertyPanel arrow={moveArrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.queryByText(/Curvature/)).not.toBeInTheDocument();
+    });
+
     it("renders delete button", () => {
       render(<PropertyPanel arrow={arrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} />);
       expect(screen.getByText("Delete arrow")).toBeInTheDocument();

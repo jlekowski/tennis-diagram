@@ -64,6 +64,32 @@ describe("AnimSidePanel", () => {
     expect(screen.getByText("Replay")).toBeInTheDocument();
   });
 
+  it("shows Resume button (not Play) when paused mid-sequence", () => {
+    render(
+      <AnimSidePanel
+        {...baseProps}
+        frame={{ playing: false, stepIdx: 2, totalSteps: 5, done: false, positions: [], ballPos: null }}
+      />
+    );
+    expect(screen.getByText("Resume")).toBeInTheDocument();
+    expect(screen.queryByText("Play")).not.toBeInTheDocument();
+  });
+
+  it("calls onResume, not onPlay, when Resume is clicked", async () => {
+    const onResume = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AnimSidePanel
+        {...baseProps}
+        onResume={onResume}
+        frame={{ playing: false, stepIdx: 2, totalSteps: 5, done: false, positions: [], ballPos: null }}
+      />
+    );
+    await user.click(screen.getByText("Resume"));
+    expect(onResume).toHaveBeenCalled();
+    expect(baseProps.onPlay).not.toHaveBeenCalled();
+  });
+
   it("shows step counter when frame exists", () => {
     render(
       <AnimSidePanel

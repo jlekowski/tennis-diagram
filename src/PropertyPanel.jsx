@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 /**
  * `chrome` carries the layout classes for the panel shell so the same panels
  * can render as the desktop right sidebar or bare inside the mobile Sheet.
@@ -8,6 +10,8 @@ export default function PropertyPanel({
   arrow,
   angles,
   onChange,
+  onCurvaturePreview,
+  onCurvatureCommit,
   onDelete,
   onClose,
   chrome = SIDEBAR_CHROME,
@@ -16,7 +20,17 @@ export default function PropertyPanel({
     return <AnglesPanel angles={angles} onChange={onChange} onDelete={onDelete} onClose={onClose} chrome={chrome} />;
   }
   if (arrow) {
-    return <ArrowPanel arrow={arrow} onChange={onChange} onDelete={onDelete} onClose={onClose} chrome={chrome} />;
+    return (
+      <ArrowPanel
+        arrow={arrow}
+        onChange={onChange}
+        onCurvaturePreview={onCurvaturePreview}
+        onCurvatureCommit={onCurvatureCommit}
+        onDelete={onDelete}
+        onClose={onClose}
+        chrome={chrome}
+      />
+    );
   }
   return (
     <aside className={"p-4 bg-white text-sm text-slate-500 " + chrome}>
@@ -30,7 +44,28 @@ export default function PropertyPanel({
   );
 }
 
-function ArrowPanel({ arrow, onChange, onDelete, onClose, chrome }) {
+function ArrowPanel({ arrow, onChange, onCurvaturePreview, onCurvatureCommit, onDelete, onClose, chrome }) {
+  // Curvature is dragged via a range input; `input` fires continuously (live
+  // preview, not committed to undo history) while `change` fires once the
+  // drag/keypress ends (the single value that gets committed).
+  const [liveCurvature, setLiveCurvature] = useState(null);
+  const curvatureRef = useRef(null);
+
+  useEffect(() => setLiveCurvature(null), [arrow.id]);
+
+  useEffect(() => {
+    const el = curvatureRef.current;
+    if (!el) return undefined;
+    function onCommit(e) {
+      onCurvatureCommit(parseInt(e.target.value, 10));
+      setLiveCurvature(null);
+    }
+    el.addEventListener("change", onCommit);
+    return () => el.removeEventListener("change", onCommit);
+  }, [onCurvatureCommit]);
+
+  const displayCurvature = liveCurvature ?? arrow.curvature ?? 0;
+
   return (
     <aside className={"p-4 bg-white text-sm space-y-3 " + chrome}>
       <PanelHeader title="Arrow properties" onClose={onClose} />
@@ -49,17 +84,24 @@ function ArrowPanel({ arrow, onChange, onDelete, onClose, chrome }) {
         />
       </FieldRow>
 
-      <FieldRow label={`Curvature (${Math.round(arrow.curvature || 0)})`}>
-        <input
-          type="range"
-          min="-160"
-          max="160"
-          step="2"
-          value={arrow.curvature || 0}
-          onChange={(e) => onChange({ curvature: parseInt(e.target.value, 10) })}
-          className="w-full"
-        />
-      </FieldRow>
+      {arrow.kind === "ball" && (
+        <FieldRow label={`Curvature (${Math.round(displayCurvature)})`}>
+          <input
+            ref={curvatureRef}
+            type="range"
+            min="-160"
+            max="160"
+            step="2"
+            value={displayCurvature}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              setLiveCurvature(v);
+              onCurvaturePreview(v);
+            }}
+            className="w-full"
+          />
+        </FieldRow>
+      )}
 
       <DeleteButton onClick={onDelete} label="Delete arrow" />
     </aside>

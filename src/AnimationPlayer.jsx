@@ -137,6 +137,7 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
     const nextIdx = a.stepIdx + 1;
     if (nextIdx >= a.sequence.length) {
       a.playing = false;
+      a.done = true;
       setFrame({
         ballPos: null,
         positions: committed,
@@ -159,9 +160,11 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
     const committed = players.map((p) => ({ ...p }));
     animRef.current = {
       playing: true,
+      done: false,
       stepIdx: 0,
       committed,
       startTime: performance.now(),
+      pausedElapsed: 0,
       sequence,
     };
     setFrame(null);
@@ -171,8 +174,23 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
 
   const pause = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
-    if (animRef.current) animRef.current.playing = false;
+    const a = animRef.current;
+    if (a) {
+      a.pausedElapsed = performance.now() - a.startTime;
+      a.playing = false;
+    }
     setFrame((f) => (f ? { ...f, playing: false } : f));
+  }, []);
+
+  // Continues from the step/elapsed-time where `pause` left off, instead of
+  // restarting the sequence like `play` does.
+  const resume = useCallback(() => {
+    const a = animRef.current;
+    if (!a || a.playing || a.done) return;
+    cancelAnimationFrame(rafRef.current);
+    a.startTime = performance.now() - (a.pausedElapsed || 0);
+    a.playing = true;
+    rafRef.current = requestAnimationFrame(() => tickRef.current());
   }, []);
 
   const reset = useCallback(() => {
@@ -184,7 +202,7 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
 
   useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
-  return { frame, play, pause, reset };
+  return { frame, play, pause, resume, reset };
 }
 
 /** Animated ball shown during playback. */
@@ -207,9 +225,10 @@ export function AnimBall({ pos }) {
  * Animation controls for the desktop right sidebar. `chrome` supplies the
  * shell layout classes. Mobile uses MobileAnimBar instead — see below.
  */
-export function AnimSidePanel({ frame, onPlay, onPause, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress, chrome = "w-72 border-l border-slate-200" }) {
+export function AnimSidePanel({ frame, onPlay, onPause, onResume, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress, chrome = "w-72 border-l border-slate-200" }) {
   const playing = frame?.playing ?? false;
   const done = frame?.done ?? false;
+  const paused = !!frame && !playing && !done;
   const step = frame ? Math.min(frame.stepIdx + 1, frame.totalSteps) : 0;
   const total = frame?.totalSteps ?? 0;
   const exporting = gifProgress != null;
@@ -229,10 +248,10 @@ export function AnimSidePanel({ frame, onPlay, onPause, onReset, onClose, speed,
 
       <div className="flex gap-2">
         <button
-          onClick={playing ? onPause : onPlay}
+          onClick={playing ? onPause : paused ? onResume : onPlay}
           className="flex-1 px-3 py-2 rounded bg-blue-500 hover:bg-blue-400 text-white font-medium"
         >
-          {playing ? 'Pause' : done ? 'Replay' : 'Play'}
+          {playing ? 'Pause' : paused ? 'Resume' : done ? 'Replay' : 'Play'}
         </button>
         <button
           onClick={onReset}
@@ -304,9 +323,10 @@ export function AnimSidePanel({ frame, onPlay, onPause, onReset, onClose, speed,
  * also keeps the speed slider unambiguous: the only text beside it is its own
  * multiplier.
  */
-export function MobileAnimBar({ frame, onPlay, onPause, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress }) {
+export function MobileAnimBar({ frame, onPlay, onPause, onResume, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress }) {
   const playing = frame?.playing ?? false;
   const done = frame?.done ?? false;
+  const paused = !!frame && !playing && !done;
   const step = frame ? Math.min(frame.stepIdx + 1, frame.totalSteps) : 0;
   const total = frame?.totalSteps ?? 0;
   const exporting = gifProgress != null;
@@ -330,8 +350,8 @@ export function MobileAnimBar({ frame, onPlay, onPause, onReset, onClose, speed,
       </div>
 
       <button
-        onClick={playing ? onPause : onPlay}
-        aria-label={playing ? "Pause" : done ? "Replay" : "Play"}
+        onClick={playing ? onPause : paused ? onResume : onPlay}
+        aria-label={playing ? "Pause" : paused ? "Resume" : done ? "Replay" : "Play"}
         className="bar-item shrink-0 w-12 rounded bg-blue-500 text-white text-lg leading-none"
       >
         {playing ? "⏸" : done ? "↻" : "▶"}
