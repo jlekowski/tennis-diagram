@@ -40,6 +40,24 @@ import { useAnimation, AnimBall, AnimSidePanel, MobileAnimBar } from "./Animatio
 
 const MIN_ARROW_LEN = 8;
 const HANDLE_R = 6;
+// Tap-near-endpoint tolerance (SVG units) — generous vs. HANDLE_R since this
+// covers a raw tap on the arrow/angles body, not the explicit handle circle.
+const TAP_GRAB_TOLERANCE = 24;
+
+// Returns the key of the point in `points` closest to `pt`, if within
+// `tolerance`, else null. `points` is e.g. { from: {x,y}, to: {x,y} }.
+function nearestPointKey(pt, points, tolerance) {
+  let best = null;
+  let bestDist = tolerance;
+  for (const [key, p] of Object.entries(points)) {
+    const d = Math.hypot(pt.x - p.x, pt.y - p.y);
+    if (d <= bestDist) {
+      best = key;
+      bestDist = d;
+    }
+  }
+  return best;
+}
 
 export default function App() {
   const { state, commit, undo, redo, canUndo, canRedo, reset } =
@@ -67,6 +85,9 @@ export default function App() {
   // Live curvature-slider preview: { arrowId, value } — not committed to
   // history until the drag/keypress ends (see PropertyPanel's ArrowPanel).
   const [curvatureDraft, setCurvatureDraft] = useState(null);
+  // Mobile only: user tapped the selected element's line again to peek at
+  // the court without losing the selection/handles. Reset on any (re)select.
+  const [sheetHidden, setSheetHidden] = useState(false);
 
   const [userPresets, setUserPresets] = useState([]);
   const [lastPresetKey, setLastPresetKey] = useState(null);
@@ -97,9 +118,10 @@ export default function App() {
   function deselectAll() {
     setSelectedArrowId(null);
     setSelectedAnglesId(null);
+    setSheetHidden(false);
   }
-  function selectArrow(id)  { setSelectedArrowId(id);  setSelectedAnglesId(null); }
-  function selectAngles(id) { setSelectedAnglesId(id); setSelectedArrowId(null); }
+  function selectArrow(id)  { setSelectedArrowId(id);  setSelectedAnglesId(null); setSheetHidden(false); }
+  function selectAngles(id) { setSelectedAnglesId(id); setSelectedArrowId(null);  setSheetHidden(false); }
   function changeTool(t) {
     setTool(t);
     deselectAll();
@@ -336,11 +358,41 @@ export default function App() {
         return;
       }
       if (arrowEl) {
-        selectArrow(arrowEl.getAttribute("data-arrow-id"));
+        const id = arrowEl.getAttribute("data-arrow-id");
+        const arrow = state.arrows.find((a) => a.id === id);
+        const near = arrow && nearestPointKey(pt, { from: arrow.from, to: arrow.to }, TAP_GRAB_TOLERANCE);
+        if (arrow && near) {
+          selectArrow(id);
+          setHandleDrag({ kind: "arrow", id, point: near, x: arrow[near].x, y: arrow[near].y });
+          svgRef.current.setPointerCapture(e.pointerId);
+          return;
+        }
+        if (id === selectedArrowId) {
+          setSheetHidden((h) => !h);
+          return;
+        }
+        selectArrow(id);
         return;
       }
       if (anglesEl) {
-        selectAngles(anglesEl.getAttribute("data-angles-id"));
+        const id = anglesEl.getAttribute("data-angles-id");
+        const wedge = angles.find((a) => a.id === id);
+        const near = wedge && nearestPointKey(
+          pt,
+          { source: wedge.source, left: wedge.left, right: wedge.right },
+          TAP_GRAB_TOLERANCE,
+        );
+        if (wedge && near) {
+          selectAngles(id);
+          setHandleDrag({ kind: "angles", id, point: near, x: wedge[near].x, y: wedge[near].y });
+          svgRef.current.setPointerCapture(e.pointerId);
+          return;
+        }
+        if (id === selectedAnglesId) {
+          setSheetHidden((h) => !h);
+          return;
+        }
+        selectAngles(id);
         return;
       }
       deselectAll();
@@ -651,7 +703,8 @@ export default function App() {
 
   // On mobile the sheet is for element editing only — animation gets the
   // in-flow MobileAnimBar instead, so playback is never covered.
-  const sheetOpen = isMobile && !animMode && (!!selectedArrow || !!selectedAngles);
+  const sheetOpen = isMobile && !animMode && (!!selectedArrow || !!selectedAngles)
+    && !sheetHidden && !handleDrag;
 
   return (
     <div className="h-full flex flex-col">
