@@ -137,6 +137,7 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
     const nextIdx = a.stepIdx + 1;
     if (nextIdx >= a.sequence.length) {
       a.playing = false;
+      a.done = true;
       setFrame({
         ballPos: null,
         positions: committed,
@@ -159,9 +160,11 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
     const committed = players.map((p) => ({ ...p }));
     animRef.current = {
       playing: true,
+      done: false,
       stepIdx: 0,
       committed,
       startTime: performance.now(),
+      pausedElapsed: 0,
       sequence,
     };
     setFrame(null);
@@ -171,8 +174,23 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
 
   const pause = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
-    if (animRef.current) animRef.current.playing = false;
+    const a = animRef.current;
+    if (a) {
+      a.pausedElapsed = performance.now() - a.startTime;
+      a.playing = false;
+    }
     setFrame((f) => (f ? { ...f, playing: false } : f));
+  }, []);
+
+  // Continues from the step/elapsed-time where `pause` left off, instead of
+  // restarting the sequence like `play` does.
+  const resume = useCallback(() => {
+    const a = animRef.current;
+    if (!a || a.playing || a.done) return;
+    cancelAnimationFrame(rafRef.current);
+    a.startTime = performance.now() - (a.pausedElapsed || 0);
+    a.playing = true;
+    rafRef.current = requestAnimationFrame(() => tickRef.current());
   }, []);
 
   const reset = useCallback(() => {
@@ -184,7 +202,7 @@ export function useAnimation(players, arrows, stepMs = DEFAULT_STEP_MS) {
 
   useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
-  return { frame, play, pause, reset };
+  return { frame, play, pause, resume, reset };
 }
 
 /** Animated ball shown during playback. */
@@ -203,16 +221,20 @@ export function AnimBall({ pos }) {
   );
 }
 
-/** Sidebar panel shown on the right in animation mode. */
-export function AnimSidePanel({ frame, onPlay, onPause, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress }) {
+/**
+ * Animation controls for the desktop right sidebar. `chrome` supplies the
+ * shell layout classes. Mobile uses MobileAnimBar instead — see below.
+ */
+export function AnimSidePanel({ frame, onPlay, onPause, onResume, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress, chrome = "w-72 border-l border-slate-200" }) {
   const playing = frame?.playing ?? false;
   const done = frame?.done ?? false;
+  const paused = !!frame && !playing && !done;
   const step = frame ? Math.min(frame.stepIdx + 1, frame.totalSteps) : 0;
   const total = frame?.totalSteps ?? 0;
   const exporting = gifProgress != null;
 
   return (
-    <aside className="w-full md:w-72 p-4 bg-white border-t md:border-t-0 md:border-l border-slate-200 text-sm space-y-3 select-none">
+    <aside className={"p-4 bg-white text-sm space-y-3 select-none " + chrome}>
       <div className="flex items-center justify-between">
         <p className="font-semibold text-slate-700">Animation</p>
         <button
@@ -226,10 +248,10 @@ export function AnimSidePanel({ frame, onPlay, onPause, onReset, onClose, speed,
 
       <div className="flex gap-2">
         <button
-          onClick={playing ? onPause : onPlay}
+          onClick={playing ? onPause : paused ? onResume : onPlay}
           className="flex-1 px-3 py-2 rounded bg-blue-500 hover:bg-blue-400 text-white font-medium"
         >
-          {playing ? 'Pause' : done ? 'Replay' : 'Play'}
+          {playing ? 'Pause' : paused ? 'Resume' : done ? 'Replay' : 'Play'}
         </button>
         <button
           onClick={onReset}
@@ -283,5 +305,96 @@ export function AnimSidePanel({ frame, onPlay, onPause, onReset, onClose, speed,
         Click the court to exit and edit. Plays through all arrows in sequence.
       </p>
     </aside>
+  );
+}
+
+/**
+ * Compact animation controls for mobile, taking the place of MobileToolStrip.
+ *
+ * Deliberately rendered in the layout flow rather than in the bottom Sheet: an
+ * overlay hid roughly a third of the court, which matters far more while
+ * watching a playback than while editing. In flow, the court area simply
+ * shrinks — and because this shares `.bar-item` sizing with MobileToolStrip,
+ * both bars are the same height, so entering animation mode doesn't resize the
+ * court at all.
+ *
+ * Everything is one row, which leaves no room for a step readout — progress is
+ * the hairline across the top instead (it doubles as GIF encode progress). That
+ * also keeps the speed slider unambiguous: the only text beside it is its own
+ * multiplier.
+ */
+export function MobileAnimBar({ frame, onPlay, onPause, onResume, onReset, onClose, speed, onSpeedChange, onExportGif, gifProgress }) {
+  const playing = frame?.playing ?? false;
+  const done = frame?.done ?? false;
+  const paused = !!frame && !playing && !done;
+  const step = frame ? Math.min(frame.stepIdx + 1, frame.totalSteps) : 0;
+  const total = frame?.totalSteps ?? 0;
+  const exporting = gifProgress != null;
+
+  const progress = exporting
+    ? gifProgress
+    : frame && total
+      ? (done ? 1 : step / total)
+      : 0;
+
+  return (
+    <div className="relative flex items-stretch gap-1.5 px-2 pt-1.5 bg-white border-t border-slate-200 pb-safe select-none">
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-slate-200">
+        <div
+          className={
+            "h-full transition-[width] duration-150 " +
+            (exporting ? "bg-emerald-500" : "bg-blue-500")
+          }
+          style={{ width: `${Math.round(progress * 100)}%` }}
+        />
+      </div>
+
+      <button
+        onClick={playing ? onPause : paused ? onResume : onPlay}
+        aria-label={playing ? "Pause" : paused ? "Resume" : done ? "Replay" : "Play"}
+        className="bar-item shrink-0 w-12 rounded bg-blue-500 text-white text-lg leading-none"
+      >
+        {playing ? "⏸" : done ? "↻" : "▶"}
+      </button>
+      <button
+        onClick={onReset}
+        aria-label="Back to start"
+        className="bar-item shrink-0 w-11 rounded border border-slate-300 bg-white text-slate-700 text-base leading-none"
+      >
+        ⏮
+      </button>
+
+      <label className="bar-item flex flex-1 min-w-0 items-center gap-1.5 px-1">
+        <input
+          type="range"
+          min="0.25"
+          max="3"
+          step="0.25"
+          value={speed}
+          onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
+          aria-label="Speed"
+          className="flex-1 min-w-0"
+        />
+        <span className="shrink-0 w-8 text-right text-[11px] text-slate-500 tabular-nums">
+          {speed}×
+        </span>
+      </label>
+
+      <button
+        onClick={onExportGif}
+        disabled={exporting}
+        aria-label="Export GIF"
+        className="bar-item shrink-0 px-2 rounded border border-slate-300 bg-white text-slate-700 text-[11px] font-medium disabled:opacity-60"
+      >
+        {exporting ? `${Math.round(gifProgress * 100)}%` : "GIF"}
+      </button>
+      <button
+        onClick={onClose}
+        aria-label="Exit animation mode"
+        className="bar-item shrink-0 w-11 rounded border border-slate-300 bg-white text-slate-500 text-base leading-none"
+      >
+        ✕
+      </button>
+    </div>
   );
 }

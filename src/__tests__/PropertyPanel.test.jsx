@@ -46,6 +46,12 @@ describe("PropertyPanel", () => {
       expect(screen.getByText(/Curvature \(30\)/)).toBeInTheDocument();
     });
 
+    it("hides curvature slider for movement arrows", () => {
+      const moveArrow = { ...arrow, kind: "movement-a" };
+      render(<PropertyPanel arrow={moveArrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.queryByText(/Curvature/)).not.toBeInTheDocument();
+    });
+
     it("renders delete button", () => {
       render(<PropertyPanel arrow={arrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} />);
       expect(screen.getByText("Delete arrow")).toBeInTheDocument();
@@ -102,5 +108,71 @@ describe("PropertyPanel", () => {
     const closeBtn = screen.getByTitle("Deselect");
     await user.click(closeBtn);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe("compact (mobile) layout", () => {
+    const arrow = {
+      id: "arrow-1",
+      kind: "ball",
+      from: { x: 0, y: 0 },
+      to: { x: 100, y: 0 },
+      label: "wide serve",
+      curvature: 30,
+    };
+    const angles = {
+      id: "angles-1",
+      source: { x: 0, y: 0 },
+      left: { x: -100, y: 100 },
+      right: { x: 100, y: 100 },
+      label: "returns",
+      bisects: 1,
+    };
+
+    it("renders arrow kind, label, and curvature in a dense layout", () => {
+      render(
+        <PropertyPanel arrow={arrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} chrome="" />
+      );
+      expect(screen.getByText("Ball trajectory")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("e.g. wide serve, poach, lob").value).toBe("wide serve");
+      expect(screen.getByText("30")).toBeInTheDocument();
+    });
+
+    it("hides curvature for movement arrows in compact mode too", () => {
+      const moveArrow = { ...arrow, kind: "movement-a" };
+      render(
+        <PropertyPanel arrow={moveArrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} chrome="" />
+      );
+      expect(screen.queryByText("Curve")).not.toBeInTheDocument();
+    });
+
+    it("calls onDelete from the icon-only delete button", async () => {
+      const onDelete = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <PropertyPanel arrow={arrow} angles={null} onChange={vi.fn()} onDelete={onDelete} onClose={vi.fn()} chrome="" />
+      );
+      await user.click(screen.getByTitle("Delete arrow"));
+      expect(onDelete).toHaveBeenCalled();
+    });
+
+    it("renders angles kind, label, and shortened bisect labels", () => {
+      render(
+        <PropertyPanel arrow={null} angles={angles} onChange={vi.fn()} onDelete={vi.fn()} onClose={vi.fn()} chrome="" />
+      );
+      expect(screen.getByText("Shot angles")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("e.g. possible returns").value).toBe("returns");
+      expect(screen.getByText("1×")).toBeInTheDocument();
+      expect(screen.getByText("2×")).toBeInTheDocument();
+    });
+
+    it("calls onClose from the compact header's close button", async () => {
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <PropertyPanel arrow={arrow} angles={null} onChange={vi.fn()} onDelete={vi.fn()} onClose={onClose} chrome="" />
+      );
+      await user.click(screen.getByTitle("Deselect"));
+      expect(onClose).toHaveBeenCalled();
+    });
   });
 });

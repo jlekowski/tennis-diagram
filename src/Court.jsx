@@ -105,13 +105,16 @@ export function clientToSvg(svgEl, clientX, clientY) {
  * Wraps children in an <svg> with the standard court viewBox and forwards a ref.
  */
 export const CourtSvg = forwardRef(function CourtSvg(
-  { className = "", onPointerDown, onPointerMove, onPointerUp, children, ...rest },
+  { className = "", viewBox, onPointerDown, onPointerMove, onPointerUp, children, ...rest },
   ref,
 ) {
   return (
     <svg
       ref={ref}
-      viewBox={`${COURT_VIEWBOX.minX} ${COURT_VIEWBOX.minY} ${COURT_VIEWBOX.w} ${COURT_VIEWBOX.h}`}
+      viewBox={
+        viewBox ??
+        `${COURT_VIEWBOX.minX} ${COURT_VIEWBOX.minY} ${COURT_VIEWBOX.w} ${COURT_VIEWBOX.h}`
+      }
       xmlns="http://www.w3.org/2000/svg"
       className={`court-surface ${className}`}
       onPointerDown={onPointerDown}

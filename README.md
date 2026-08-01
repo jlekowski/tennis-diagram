@@ -2,6 +2,8 @@
 
 A browser-based tactical diagram editor for tennis. Draw shot trajectories and player movements on an interactive court, then play them back as animation.
 
+Works on phones and installs to your home screen — see [On your phone](#on-your-phone).
+
 ## Getting started
 
 ```bash
@@ -111,6 +113,45 @@ All file actions are in the **File ▾** menu in the toolbar.
   ]
 }
 ```
+
+## On your phone
+
+The app is a PWA: it installs to your home screen and works with no connection.
+
+**Install**
+
+- **Android / Chrome** — open the site, then *⋮ menu → Add to Home screen* (or
+  tap the install prompt when it appears).
+- **iOS / Safari** — open the site, then *Share → Add to Home Screen*.
+
+Launched from the home screen it runs full-screen with no browser chrome. Once
+you have loaded it online, it works offline; your diagram is saved on the device
+as you edit, so it survives closing the app.
+
+**Touch controls**
+
+| Gesture | What it does |
+|---------|-------------|
+| Tap a tool in the bottom strip | Switch tool |
+| Drag a player | Reposition |
+| Drag on the court (with a draw tool) | Draw an arrow |
+| Tap an arrow or angles wedge | Open its properties in a bottom sheet |
+| Pinch with two fingers | Zoom the court, up to 4× |
+| Drag with two fingers | Pan while zoomed |
+| **Reset view** (top right) | Back to the whole court |
+
+The layout adapts below 768 px: the court is sized to fill the screen so it never
+scrolls, the draw tools move to a bottom strip within thumb reach, and the
+properties panel becomes a slide-up sheet. Everything else lives behind the
+**⋯** menu in the top bar.
+
+In animation mode the tool strip is replaced by a playback bar of the same height
+(play/pause, back to start, speed, GIF export). It docks below the court rather
+than covering it, so the whole diagram stays visible while it plays, and the
+court doesn't jump when you switch modes. A hairline along the top of the bar
+tracks progress.
+
+On desktop, ctrl/⌘ + scroll zooms the court.
 
 ## Coordinate system
 

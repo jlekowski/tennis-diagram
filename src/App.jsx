@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useDiagramState,
   movePlayer,
@@ -17,8 +17,18 @@ import { CourtSvg, COURT_VIEWBOX, clientToSvg } from "./Court.jsx";
 import Player, { PLAYER_RADIUS } from "./Player.jsx";
 import Arrow from "./Arrow.jsx";
 import Angles from "./Angles.jsx";
-import Toolbar from "./Toolbar.jsx";
+import Toolbar, { MobileTopBar, MobileToolStrip } from "./Toolbar.jsx";
 import PropertyPanel from "./PropertyPanel.jsx";
+import Sheet from "./Sheet.jsx";
+import { useIsMobile } from "./useMediaQuery.js";
+import {
+  FIT_VIEW,
+  anchoredView,
+  distance,
+  isZoomed,
+  midpoint,
+  viewBoxString,
+} from "./courtView.js";
 import { downloadSvg, downloadPng, downloadGif } from "./export.js";
 import {
   downloadJson,
@@ -26,10 +36,28 @@ import {
   loadFromStorage,
   saveToStorage,
 } from "./persist.js";
-import { useAnimation, AnimBall, AnimSidePanel } from "./AnimationPlayer.jsx";
+import { useAnimation, AnimBall, AnimSidePanel, MobileAnimBar } from "./AnimationPlayer.jsx";
 
 const MIN_ARROW_LEN = 8;
 const HANDLE_R = 6;
+// Tap-near-endpoint tolerance (SVG units) — generous vs. HANDLE_R since this
+// covers a raw tap on the arrow/angles body, not the explicit handle circle.
+const TAP_GRAB_TOLERANCE = 24;
+
+// Returns the key of the point in `points` closest to `pt`, if within
+// `tolerance`, else null. `points` is e.g. { from: {x,y}, to: {x,y} }.
+function nearestPointKey(pt, points, tolerance) {
+  let best = null;
+  let bestDist = tolerance;
+  for (const [key, p] of Object.entries(points)) {
+    const d = Math.hypot(pt.x - p.x, pt.y - p.y);
+    if (d <= bestDist) {
+      best = key;
+      bestDist = d;
+    }
+  }
+  return best;
+}
 
 export default function App() {
   const { state, commit, undo, redo, canUndo, canRedo, reset } =
@@ -38,8 +66,12 @@ export default function App() {
   const [animMode, setAnimMode] = useState(false);
   const [animSpeed, setAnimSpeed] = useState(1);
   const [gifProgress, setGifProgress] = useState(null); // 0..1 while exporting
-  const { frame: animFrame, play: animPlay, pause: animPause, reset: animReset } =
+  const { frame: animFrame, play: animPlay, pause: animPause, resume: animResume, reset: animReset } =
     useAnimation(state.players, state.arrows, Math.round(700 / animSpeed));
+
+  // Only one of the mobile/desktop layouts is mounted at a time, so the
+  // toolbar and property panel never appear twice in the DOM.
+  const isMobile = useIsMobile();
 
   const [tool, setTool] = useState("select");
   const [selectedArrowId, setSelectedArrowId] = useState(null);
@@ -50,6 +82,12 @@ export default function App() {
   const [pointerPos, setPointerPos] = useState(null);   // angles draft preview
   // Endpoint-handle drag: { kind: 'arrow'|'angles', id, point, x, y }
   const [handleDrag, setHandleDrag] = useState(null);
+  // Live curvature-slider preview: { arrowId, value } — not committed to
+  // history until the drag/keypress ends (see PropertyPanel's ArrowPanel).
+  const [curvatureDraft, setCurvatureDraft] = useState(null);
+  // Mobile only: user tapped the selected element's line again to peek at
+  // the court without losing the selection/handles. Reset on any (re)select.
+  const [sheetHidden, setSheetHidden] = useState(false);
 
   const [userPresets, setUserPresets] = useState([]);
   const [lastPresetKey, setLastPresetKey] = useState(null);
@@ -80,9 +118,10 @@ export default function App() {
   function deselectAll() {
     setSelectedArrowId(null);
     setSelectedAnglesId(null);
+    setSheetHidden(false);
   }
-  function selectArrow(id)  { setSelectedArrowId(id);  setSelectedAnglesId(null); }
-  function selectAngles(id) { setSelectedAnglesId(id); setSelectedArrowId(null); }
+  function selectArrow(id)  { setSelectedArrowId(id);  setSelectedAnglesId(null); setSheetHidden(false); }
+  function selectAngles(id) { setSelectedAnglesId(id); setSelectedArrowId(null);  setSheetHidden(false); }
   function changeTool(t) {
     setTool(t);
     deselectAll();
@@ -119,6 +158,112 @@ export default function App() {
     } finally {
       setGifProgress(null);
     }
+  }
+
+  // ---- Court view transform (pinch-zoom / pan) -----------------------------
+
+  const [view, setView] = useState(FIT_VIEW);
+  // Live pointers on the court, keyed by pointerId — two of them means pinch.
+  const pointersRef = useRef(new Map());
+  const pinchRef = useRef(null);
+  // Set once a pinch starts, cleared only when every finger has lifted, so the
+  // finger left behind at the end of a pinch cannot start an edit.
+  const gestureBlockRef = useRef(false);
+  // In animation mode, a clean single tap (not a pinch) returns to editing.
+  const tapRef = useRef(null);
+
+  const resetView = useCallback(() => setView(FIT_VIEW), []);
+
+  function cancelTransient() {
+    setDrag(null);
+    setDrawing(null);
+    setHandleDrag(null);
+  }
+
+  function beginPinch() {
+    cancelTransient();
+    gestureBlockRef.current = true;
+    tapRef.current = null;
+    const [a, b] = [...pointersRef.current.values()];
+    const mid = midpoint(a, b);
+    pinchRef.current = {
+      startView: view,
+      startDist: Math.max(distance(a, b), 1),
+      anchor: clientToSvg(svgRef.current, mid.x, mid.y),
+      rect: svgRef.current.getBoundingClientRect(),
+    };
+  }
+
+  // Ctrl/⌘+wheel zooms on desktop (also the trackpad pinch gesture). Attached
+  // natively because React's onWheel is passive and cannot preventDefault.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return undefined;
+    function onWheel(e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const anchor = clientToSvg(svg, e.clientX, e.clientY);
+      const factor = Math.exp(-e.deltaY / 300);
+      setView((v) => anchoredView(v, anchor, factor, { x: e.clientX, y: e.clientY }, rect));
+    }
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, []);
+
+  function onCourtPointerDown(e) {
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointersRef.current.size === 2) {
+      beginPinch();
+      return;
+    }
+    if (pointersRef.current.size > 2 || gestureBlockRef.current) return;
+
+    if (animMode) {
+      tapRef.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    handlePointerDown(e);
+  }
+
+  function onCourtPointerMove(e) {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (pinchRef.current && pointersRef.current.size >= 2) {
+      const [a, b] = [...pointersRef.current.values()];
+      const { startView, startDist, anchor, rect } = pinchRef.current;
+      setView(anchoredView(startView, anchor, distance(a, b) / startDist, midpoint(a, b), rect));
+      return;
+    }
+    if (gestureBlockRef.current || animMode) return;
+    handlePointerMove(e);
+  }
+
+  function onCourtPointerEnd(e) {
+    pointersRef.current.delete(e.pointerId);
+    if (pinchRef.current && pointersRef.current.size < 2) pinchRef.current = null;
+
+    if (pointersRef.current.size > 0) return;
+
+    const wasPinch = gestureBlockRef.current;
+    gestureBlockRef.current = false;
+
+    if (animMode) {
+      const tap = tapRef.current;
+      tapRef.current = null;
+      if (!wasPinch && tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 10) {
+        exitAnimMode();
+      }
+      return;
+    }
+    if (wasPinch) {
+      cancelTransient();
+      return;
+    }
+    handlePointerUp(e);
   }
 
   // ---- Pointer handling on the SVG -----------------------------------------
@@ -213,11 +358,41 @@ export default function App() {
         return;
       }
       if (arrowEl) {
-        selectArrow(arrowEl.getAttribute("data-arrow-id"));
+        const id = arrowEl.getAttribute("data-arrow-id");
+        const arrow = state.arrows.find((a) => a.id === id);
+        const near = arrow && nearestPointKey(pt, { from: arrow.from, to: arrow.to }, TAP_GRAB_TOLERANCE);
+        if (arrow && near) {
+          selectArrow(id);
+          setHandleDrag({ kind: "arrow", id, point: near, x: arrow[near].x, y: arrow[near].y });
+          svgRef.current.setPointerCapture(e.pointerId);
+          return;
+        }
+        if (id === selectedArrowId) {
+          setSheetHidden((h) => !h);
+          return;
+        }
+        selectArrow(id);
         return;
       }
       if (anglesEl) {
-        selectAngles(anglesEl.getAttribute("data-angles-id"));
+        const id = anglesEl.getAttribute("data-angles-id");
+        const wedge = angles.find((a) => a.id === id);
+        const near = wedge && nearestPointKey(
+          pt,
+          { source: wedge.source, left: wedge.left, right: wedge.right },
+          TAP_GRAB_TOLERANCE,
+        );
+        if (wedge && near) {
+          selectAngles(id);
+          setHandleDrag({ kind: "angles", id, point: near, x: wedge[near].x, y: wedge[near].y });
+          svgRef.current.setPointerCapture(e.pointerId);
+          return;
+        }
+        if (id === selectedAnglesId) {
+          setSheetHidden((h) => !h);
+          return;
+        }
+        selectAngles(id);
         return;
       }
       deselectAll();
@@ -328,6 +503,7 @@ export default function App() {
     setLastPresetKey(key);
     deselectAll();
     setAnglesDraft(null);
+    if (animMode) animReset();
   }
 
   async function handlePresetsFileSelected(e) {
@@ -392,6 +568,13 @@ export default function App() {
       commit((s) => updateAngles(s, selectedAnglesId, patch));
     }
   }
+  function handleCurvaturePreview(value) {
+    if (selectedArrowId) setCurvatureDraft({ arrowId: selectedArrowId, value });
+  }
+  function handleCurvatureCommit(value) {
+    if (selectedArrowId) commit((s) => updateArrow(s, selectedArrowId, { curvature: value }));
+    setCurvatureDraft(null);
+  }
   function handleDeleteSelected() {
     if (selectedArrowId) {
       commit((s) => deleteArrow(s, selectedArrowId));
@@ -409,7 +592,13 @@ export default function App() {
     if (!handleDrag || handleDrag.kind !== kind || handleDrag.id !== el.id) return el;
     return { ...el, [handleDrag.point]: { x: handleDrag.x, y: handleDrag.y } };
   }
-  const arrowsToRender = state.arrows.map((a) => applyHandleDrag(a, "arrow"));
+  const arrowsToRender = state.arrows.map((a) => {
+    const dragged = applyHandleDrag(a, "arrow");
+    if (curvatureDraft && curvatureDraft.arrowId === a.id) {
+      return { ...dragged, curvature: curvatureDraft.value };
+    }
+    return dragged;
+  });
   const anglesToRender = angles.map((a) => applyHandleDrag(a, "angles"));
   const playersToRender = state.players.map((p) =>
     drag && drag.playerId === p.id ? { ...p, x: drag.x, y: drag.y } : p,
@@ -464,36 +653,75 @@ export default function App() {
     return [];
   })();
 
-  return (
-    <div className="min-h-screen flex flex-col">
-      <header className="px-4 py-3 bg-white border-b border-slate-200">
-        <h1 className="text-lg font-semibold text-slate-800">
-          Tennis Tactics Diagram
-        </h1>
-        <p className="text-xs text-slate-500">
-          Drag players, pick a draw tool to add arrows, select an arrow to edit.
-        </p>
-      </header>
+  const toolbarProps = {
+    tool,
+    onToolChange: changeTool,
+    presetGroups: buildPresetGroups(userPresets),
+    onApplyPreset: handleApplyPreset,
+    selectedPreset: lastPresetKey,
+    onLoadPresets: () => presetsFileRef.current?.click(),
+    onUndo: undo,
+    onRedo: redo,
+    canUndo,
+    canRedo,
+    onExportSvg: handleExportSvg,
+    onExportPng: handleExportPng,
+    onExportJson: handleExportJson,
+    onImportJson: handleImportJsonClick,
+    onReset: handleReset,
+    animMode,
+    onAnimMode: enterAnimMode,
+  };
 
-      <Toolbar
-        tool={tool}
-        onToolChange={changeTool}
-        presetGroups={buildPresetGroups(userPresets)}
-        onApplyPreset={handleApplyPreset}
-        selectedPreset={lastPresetKey}
-        onLoadPresets={() => presetsFileRef.current?.click()}
-        onUndo={undo}
-        onRedo={redo}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        onExportSvg={handleExportSvg}
-        onExportPng={handleExportPng}
-        onExportJson={handleExportJson}
-        onImportJson={handleImportJsonClick}
-        onReset={handleReset}
-        animMode={animMode}
-        onAnimMode={enterAnimMode}
-      />
+  const panelChrome = isMobile ? "" : "w-72 border-l border-slate-200";
+  const panel = animMode ? (
+    <AnimSidePanel
+      frame={animFrame}
+      onPlay={animPlay}
+      onPause={animPause}
+      onResume={animResume}
+      onReset={animReset}
+      onClose={exitAnimMode}
+      speed={animSpeed}
+      onSpeedChange={setAnimSpeed}
+      onExportGif={handleExportGif}
+      gifProgress={gifProgress}
+      chrome={panelChrome}
+    />
+  ) : (
+    <PropertyPanel
+      arrow={selectedArrow}
+      angles={selectedAngles}
+      onChange={handlePatchSelected}
+      onCurvaturePreview={handleCurvaturePreview}
+      onCurvatureCommit={handleCurvatureCommit}
+      onDelete={handleDeleteSelected}
+      onClose={deselectAll}
+      chrome={panelChrome}
+    />
+  );
+
+  // On mobile the sheet is for element editing only — animation gets the
+  // in-flow MobileAnimBar instead, so playback is never covered.
+  const sheetOpen = isMobile && !animMode && (!!selectedArrow || !!selectedAngles)
+    && !sheetHidden && !handleDrag;
+
+  return (
+    <div className="h-full flex flex-col">
+      {!isMobile && (
+        <header className="px-4 py-3 bg-white border-b border-slate-200">
+          <h1 className="text-lg font-semibold text-slate-800">
+            Tennis Tactics Diagram
+          </h1>
+          <p className="text-xs text-slate-500">
+            Drag players, pick a draw tool to add arrows, select an arrow to edit.
+          </p>
+        </header>
+      )}
+
+      {isMobile && <MobileTopBar {...toolbarProps} />}
+
+      {!isMobile && <Toolbar {...toolbarProps} />}
       <input
         ref={fileInputRef}
         type="file"
@@ -509,15 +737,31 @@ export default function App() {
         style={{ display: "none" }}
       />
 
-      <div className="flex flex-1 min-h-0 flex-col md:flex-row">
-        <main className="flex-1 flex items-center justify-center p-2 md:p-6 bg-slate-50">
-          <div className="bg-white rounded-lg shadow-sm overflow-hidden w-full md:w-[420px]">
+      <div className="flex flex-1 min-h-0">
+        <main
+          className={
+            "relative flex-1 min-h-0 flex items-center justify-center " +
+            // On mobile the court is sized to the viewport and must never
+            // scroll; on desktop it keeps its natural 420x770 and the area
+            // scrolls if the window is short.
+            (isMobile ? "bg-slate-100 overflow-hidden" : "bg-slate-50 p-6 overflow-auto")
+          }
+        >
+          <div
+            className={
+              isMobile
+                ? "w-full h-full"
+                : "bg-white rounded-lg shadow-sm overflow-hidden w-[420px] shrink-0"
+            }
+          >
             <CourtSvg
               ref={svgRef}
-              width="100%"
-              onPointerDown={animMode ? exitAnimMode : handlePointerDown}
-              onPointerMove={animMode ? undefined : handlePointerMove}
-              onPointerUp={animMode ? undefined : handlePointerUp}
+              viewBox={viewBoxString(view)}
+              className={isMobile ? "w-full h-full" : "w-full"}
+              onPointerDown={onCourtPointerDown}
+              onPointerMove={onCourtPointerMove}
+              onPointerUp={onCourtPointerEnd}
+              onPointerCancel={onCourtPointerEnd}
               style={{
                 display: "block",
                 cursor: animMode ? "default" : tool === "select" ? "default" : "crosshair",
@@ -604,13 +848,27 @@ export default function App() {
               ))}
             </CourtSvg>
           </div>
+
+          {isZoomed(view) && (
+            <button
+              onClick={resetView}
+              className="absolute top-2 right-2 px-3 py-2 rounded-full bg-white/90 border border-slate-300 text-xs text-slate-700 shadow-sm"
+            >
+              Reset view
+            </button>
+          )}
         </main>
 
-        {animMode ? (
-          <AnimSidePanel
+        {!isMobile && panel}
+      </div>
+
+      {isMobile &&
+        (animMode ? (
+          <MobileAnimBar
             frame={animFrame}
             onPlay={animPlay}
             onPause={animPause}
+            onResume={animResume}
             onReset={animReset}
             onClose={exitAnimMode}
             speed={animSpeed}
@@ -619,17 +877,14 @@ export default function App() {
             gifProgress={gifProgress}
           />
         ) : (
-          <PropertyPanel
-            arrow={selectedArrow}
-            angles={selectedAngles}
-            onChange={handlePatchSelected}
-            onDelete={handleDeleteSelected}
-            onClose={deselectAll}
-          />
-        )}
-      </div>
+          <MobileToolStrip tool={tool} onToolChange={changeTool} />
+        ))}
 
-      <footer className="px-6 py-2 border-t border-slate-200 flex items-center gap-1 text-xs text-slate-400">
+      <Sheet open={sheetOpen} onClose={deselectAll}>
+        {panel}
+      </Sheet>
+
+      <footer className="hidden md:flex px-6 py-2 border-t border-slate-200 items-center gap-1 text-xs text-slate-400">
         <span>Made by</span>
         <a href="https://lekowski.dev" className="text-slate-500 hover:text-slate-700 underline underline-offset-2">Jerzy Lekowski</a>
         <span>·</span>

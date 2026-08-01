@@ -51,10 +51,19 @@ tennis-diagram/
 │   ├── presets.js          Preset parsing (JSONL) and application
 │   ├── persist.js          localStorage autosave + JSON import/export
 │   ├── export.js           SVG serialisation + PNG/GIF rasterisation via canvas
+│   ├── courtView.js        Pinch-zoom / pan view transform maths (pure)
+│   ├── useMediaQuery.js    useIsMobile() — mobile vs desktop layout switch
+│   ├── Sheet.jsx           Mobile bottom sheet (portal + scrim)
 │   ├── __tests__/          Vitest unit + component tests
-│   └── index.css           Tailwind import + body/root height + .court-surface
+│   └── index.css           Tailwind import + dvh/safe-area/.court-surface
 ├── public/
-│   └── presets.jsonl       Built-in presets served as static asset
+│   ├── presets.jsonl       Built-in presets served as static asset
+│   ├── manifest.webmanifest  PWA manifest (all paths relative)
+│   ├── sw.js               Hand-rolled network-first service worker
+│   └── icons/              icon.svg source + generated 192/512/maskable PNGs
+├── scripts/
+│   └── generate-icons.mjs  Dependency-free PNG rasteriser for the icons
+├── TODO.md                 Deferred work (touch robustness, tests)
 ├── index.html              Vite HTML template
 ├── vite.config.js          Vite config (React + Tailwind plugins, port 5173, host 0.0.0.0)
 ├── vitest.config.js        Vitest config (jsdom env, globals, setup file)
@@ -145,11 +154,149 @@ The 30 px margin around the court (`-30` origin) allows placing players outside 
 
 ---
 
+## View transform (pinch-zoom / pan)
+
+Zoom is expressed purely as a **narrowed `viewBox`** on the court `<svg>`, never
+as a CSS or SVG transform. This is the key design decision: `clientToSvg` goes
+through `getScreenCTM().inverse()`, which already accounts for the viewBox, so
+hit-testing, dragging, snapping and player clamping all keep working unchanged.
+
+`courtView.js` holds the maths, all pure:
+
+| Function | Purpose |
+|----------|---------|
+| `FIT_VIEW` | the whole court — `{ x, y, w, h }` matching `COURT_VIEWBOX` |
+| `zoomOf(view)` / `isZoomed(view)` | magnification; 1 = fit |
+| `clampView(view)` | clamps zoom to `[MIN_ZOOM, MAX_ZOOM]` (1–4) and keeps the view inside the court box |
+| `anchoredView(startView, anchor, factor, client, rect)` | the view that puts SVG point `anchor` under viewport point `client` at `factor`× the starting zoom — this is what pins the court to the pinch midpoint |
+| `distance` / `midpoint` | client-space helpers |
+
+The view aspect ratio is always the court's, so the SVG letterboxes identically
+at every zoom level.
+
+**Gesture handling** lives in `App.jsx`. `pointersRef` is a `Map` of live
+pointerIds; a second pointer starts a pinch, which cancels any in-flight
+single-finger edit without committing it. `gestureBlockRef` stays set until
+*every* finger lifts, so the finger left behind at the end of a pinch cannot
+start a new edit. Two-finger pan comes free — as the midpoint moves, the
+anchored view follows. On desktop, ctrl/⌘+wheel zooms (attached natively because
+React's `onWheel` is passive and cannot `preventDefault`).
+
+In animation mode a clean single tap exits back to editing; a pinch does not
+count as a tap, so zooming during playback is possible.
+
+**Exports ignore the view transform.** `export.js` resets the clone's viewBox to
+`FULL_VIEWBOX` and derives width/height from `COURT_VIEWBOX` rather than reading
+the live attribute, so SVG/PNG/GIF exports are always the full diagram no matter
+what is on screen.
+
+---
+
+## Responsive layout
+
+`useIsMobile()` (`useMediaQuery.js`) drives a **JS** breakpoint at Tailwind's
+`md` (768 px) rather than CSS-only `md:` classes. Only one of the two layouts is
+mounted at a time, which matters for two reasons: the toolbar and property panel
+never appear twice in the DOM (which would break accessible-name lookups and the
+existing tests), and the bottom sheet is not rendered at all on desktop. It
+returns `false` when `matchMedia` is unavailable, so jsdom tests get the desktop
+layout.
+
+| | Desktop (≥768 px) | Mobile |
+|---|---|---|
+| Header | `<header>` with title + hint | hidden |
+| Controls | `Toolbar` — single scrolling row | `MobileTopBar` (preset, undo/redo, ⋯ File menu, ▶) + `MobileToolStrip` (5 draw tools, bottom) |
+| Court | fixed 420×770 card, area scrolls if window is short | fills remaining height, letterboxed, never scrolls |
+| Element properties | right sidebar, `chrome="w-72 border-l …"` | `Sheet` bottom sheet, `chrome=""` |
+| Animation controls | `AnimSidePanel` in the same sidebar | `MobileAnimBar`, **in the layout flow** |
+| Footer | shown | hidden |
+
+`PropertyPanel` and `AnimSidePanel` take a **`chrome`** prop carrying the shell's
+layout classes, so the same components render either as the sidebar or bare
+inside the sheet. The mobile sheet opens only when an element is selected
+(`!animMode && (selectedArrow || selectedAngles)`).
+
+**Animation deliberately does not use the sheet.** As an overlay it hid roughly a
+third of the court, which matters much more while watching a playback than while
+editing. `MobileAnimBar` renders in the flow, in place of `MobileToolStrip`, so
+the whole diagram stays visible.
+
+Both bars size their children with the `.bar-item` class (`min-height: 52px`, in
+`index.css`) and share the same wrapper padding, so they come out the same height
+— entering animation mode doesn't resize the court. Change that one rule to
+retune both.
+
+`MobileAnimBar` fits on a single row down to 320 px: play/pause, back-to-start,
+speed slider + multiplier, GIF, exit. There is no step readout — progress is a
+hairline across the top of the bar, which costs no layout height (it is
+absolutely positioned) and doubles as the GIF encode progress. That also keeps
+the slider unambiguous: the only text beside it is its own `1×` multiplier.
+
+It is a separate component rather than a `chrome` variant of `AnimSidePanel`
+because the layouts are genuinely different — horizontal and icon-driven versus
+a vertical stack of labelled blocks.
+
+The court letterboxes against `bg-slate-100`, which is the same `#f1f5f9` the
+court paints as its own margin — so the letterbox bars are invisible.
+
+`index.css` carries the mobile hardening: `100dvh` (behind `@supports`) so the
+collapsing URL bar can't cut the court off, `overscroll-behavior-y: none`,
+`-webkit-tap-highlight-color: transparent`, `input[type=text] { font-size: 16px }`
+to stop iOS focus-zoom, and `.pt-safe` / `.pb-safe` safe-area helpers used by
+the mobile bars and the sheet.
+
+---
+
+## PWA
+
+Hand-rolled rather than `vite-plugin-pwa`. The deciding factor is that this repo
+ships **one `dist/` to two subpaths** (GitHub Pages `/tennis-diagram/` and
+`lekowski.tennis/tennis-diagram/`), which is why `vite.config.js` sets
+`base: "./"` — and relative base is exactly what the plugin handles badly, since
+it derives the registration path and the manifest `start_url`/`scope` from it.
+
+**The rule: every path stays relative.** `manifest.webmanifest` uses
+`start_url: "./index.html"` and `scope: "./"`; `main.jsx` calls
+`register("./sw.js")`, which resolves against the document, so the worker's scope
+becomes whatever folder the app is served from. Verified: served at
+`/tennis-diagram/`, the scope resolves to `/tennis-diagram/` with no rebuild.
+
+**`public/sw.js`** is network-first with cache-on-write: freshest build always
+wins while online, cache is the offline fallback, `./index.html` is the
+navigation fallback. There is deliberately no "update available, reload?" flow —
+network-first makes it unnecessary. `ASSETS` precaches only the **stable** paths
+(`./`, `index.html`, the manifest, `presets.jsonl`, the icons); Vite's
+content-hashed bundle filenames cannot be listed at build time. Bump `CACHE`
+when the shell changes to evict stale hashed entries.
+
+**Cache warming.** A service worker only sees requests made *after* it takes
+control, so on a first visit the hashed JS/CSS would miss the cache entirely and
+the app would break if the user installed it and immediately went offline.
+`warmCache()` in `main.jsx` closes this: it reads the URLs the browser actually
+just fetched off `performance.getEntriesByType("resource")` and adds them to the
+same cache the worker uses. The `CACHE` constant is therefore duplicated in
+`main.jsx` and `public/sw.js` — **bump both together**.
+
+**Icons.** `public/icons/icon.svg` is the source of truth; `scripts/generate-icons.mjs`
+rasterises it to 192/512/maskable PNGs. It is deliberately dependency-free (its
+own supersampled rasteriser plus a minimal PNG encoder over node's `zlib`), so
+`npm ci` in CI stays lean. The PNGs are committed — regenerate with
+`docker run --rm --user $(id -u):$(id -g) -v .:/app -w /app node:lts npm run icons`
+and keep the geometry in sync with `icon.svg`. The maskable variant insets the
+artwork to 62.5% on a full-bleed background to clear Android's safe zone.
+
+`index.html` locks page zoom (`maximum-scale=1, user-scalable=no`) because the
+court implements its own pinch-zoom, and sets `viewport-fit=cover` to enable the
+safe-area padding.
+
+---
+
 ## Component architecture
 
 ```
 App
-├── Toolbar                  (stateless, callbacks + selectedPreset passed down)
+├── header                   (desktop only)
+├── Toolbar                  (desktop) | MobileTopBar (mobile)
 ├── CourtSvg                 (forwardRef wrapper, hosts all pointer events)
 │   ├── CourtLines           (static background, no interactivity)
 │   ├── Angles[]             (data-angles-id for hit testing)
@@ -158,12 +305,22 @@ App
 │   ├── Player[]             (data-player-id; uses displayPlayers in anim mode)
 │   ├── AnimBall             (yellow dot; only in animation mode)
 │   └── handle circles       (drag handles for selected element endpoints)
-└── right sidebar (always visible, w-72)
-    ├── PropertyPanel        (default: label + curvature inputs for selected element)
-    └── AnimSidePanel        (animation mode: play/pause/reset/speed controls)
+├── "Reset view" pill        (over the court, only when isZoomed(view))
+├── right sidebar            (desktop only, w-72)
+│   ├── PropertyPanel        (default: label + curvature inputs for selected element)
+│   └── AnimSidePanel        (animation mode: play/pause/reset/speed controls)
+├── MobileToolStrip          (mobile, editing — 5 draw tools, bottom)
+│   └── MobileAnimBar        (mobile, animation — replaces the tool strip)
+├── footer                   (desktop only)
+└── Sheet                    (mobile only, portal — hosts PropertyPanel)
 ```
 
-In animation mode, clicking anywhere on the court (`onPointerDown={exitAnimMode}`) exits back to editing. `App.jsx` owns all pointer logic; hit-testing is done via `e.target.closest("[data-*]")`.
+`App.jsx` owns all pointer logic; hit-testing is done via
+`e.target.closest("[data-*]")`. The court's pointer handlers are the gesture
+wrappers (`onCourtPointerDown` / `Move` / `End`), which dispatch to either the
+pinch handler or the existing edit handlers — see *View transform* above.
+`onPointerCancel` is wired to the same end handler so an interrupted touch
+cannot leave a drag stuck.
 
 ---
 
@@ -260,6 +417,17 @@ Buttons are grouped:
 5. **Reset**
 6. **▶ Animate**
 
+`Toolbar.jsx` also exports the two mobile variants, which share `TOOL_BUTTONS`,
+`TOOL_BTN_ACCENT` and `FileMenu` with the desktop toolbar:
+
+- **`MobileTopBar`** — preset `<select>`, undo/redo, `⋯` (the same `FileMenu` in
+  `compact` mode, which uses a 44 px trigger, taller menu rows, and appends
+  **Reset** since there is no room for a standalone button), and ▶ Animate.
+- **`MobileToolStrip`** — the five draw tools as icon+label buttons, ≥52 px tall,
+  pinned to the bottom with `pb-safe`.
+
+Adding a tool to `TOOL_BUTTONS` therefore updates both layouts at once.
+
 ---
 
 ## Persistence
@@ -279,6 +447,7 @@ Tests run on **Vitest** with **Testing Library** (jsdom environment). Run the su
 - `vitest.config.js` enables `globals` (no need to import `describe`/`it`/`expect`) and loads `vitest.setup.js`, which registers `@testing-library/jest-dom` matchers.
 - Pure modules (`store.js`, geometry in `Arrow.jsx`/`Angles.jsx`, `presets.js`, `persist.js`, `simulateFrames`/`animationSequence`) export their internals so tests can call them directly.
 - Canvas-dependent export (`downloadSvg`/`downloadPng`/`downloadGif`) and the rAF-driven `useAnimation` loop are not unit-tested; `simulateFrames` covers the pure animation math behind the exporter.
+- `courtView.js`, `useMediaQuery.js` and `Sheet.jsx` are **not yet tested** — see `TODO.md`. Because `useIsMobile()` returns `false` without `matchMedia`, every existing component test renders the desktop layout.
 - Tests that exercise error paths spy on `console.warn` with `mockImplementation(() => {})` to keep output clean while asserting the warning fires.
 
 ## How to make common changes
@@ -302,6 +471,23 @@ Edit `initialState.players` in `store.js`. The player `id` must be unique; `team
 ### Add a new built-in preset
 
 Append a JSONL line to `public/presets.jsonl`. The `key` must be unique across all lines.
+
+### Change the app icon
+
+Edit the geometry in `public/icons/icon.svg` **and** the mirrored `SHAPES` array
+in `scripts/generate-icons.mjs` (they are kept in sync by hand), then regenerate
+and commit the PNGs:
+
+```bash
+docker run --rm --user $(id -u):$(id -g) -v .:/app -w /app node:lts npm run icons
+```
+
+The `--user` flag matters — without it the container writes root-owned files.
+
+### Ship a change to the offline shell
+
+Bump `CACHE` in **both** `public/sw.js` and `src/main.jsx` (they must match) so
+old cached entries are evicted on activate.
 
 ### Modify court geometry
 
